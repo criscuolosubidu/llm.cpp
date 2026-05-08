@@ -1,0 +1,92 @@
+# =========================
+# Build directories
+# =========================
+cmake-build-*/
+build/
+out/
+
+# =========================
+# CLion / IntelliJ
+# =========================
+.idea/
+*.iml
+
+# =========================
+# CMake
+# =========================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+install_manifest.txt
+
+# =========================
+# CUDA / NVCC
+# =========================
+*.cubin
+*.fatbin
+*.ptx
+*.nvvp
+*.nsys-rep
+*.qdrep
+
+# =========================
+# Executables / Libraries
+# =========================
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# =========================
+# Object files
+# =========================
+*.o
+*.obj
+*.lo
+*.slo
+
+# =========================
+# Debug / profiling
+# =========================
+*.gcda
+*.gcno
+*.gcov
+gmon.out
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# =========================
+# Python (如果项目混合 PyTorch / CUDA)
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# =========================
+# WSL / Linux misc
+# =========================
+.cache/
