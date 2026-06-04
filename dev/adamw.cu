@@ -8,16 +8,15 @@ References:
 Compile example:
 nvcc adamw.cu -o adamw
 nvcc -O3 --use_fast_math adamw.cu -o adamw
-
-./adamw
-
-TODO(general):
-amsgrad=True
-
-TODO(perf):
-dtype
-thread coarsening/ILP
 */
+#include <chrono>
+#include <iostream>
+#include <random>
+#include <vector>
+#include <iomanip>
+#include "utils.cuh"
+
+using cuda_utils::DeviceBuffer;
 
 /*
 计算的公式基本上就是下面的CPU版本的逻辑，默认就是求最小值，然后是修正
@@ -144,6 +143,121 @@ __global__ void adamw_gpu_fp32_1xn_lerp(
     }
 }
 
+// 启动 adamw 优化器的配置
+struct AdamWConfig {
+    float lr = 1e-3f;
+    float beta1 = 0.9f;
+    float beta2 = 0.999f;
+    float eps = 1e-8f;
+    float weight_decay = 0.0f;
+    bool amsgrad = false;
+};
+
+constexpr unsigned int ceil_div(size_t a, size_t b) {
+    return (a + b - 1) / b;
+}
+
+void launch_adamw(DeviceBuffer<float> &params, const DeviceBuffer<float> &grads, DeviceBuffer<float> &m,
+                  DeviceBuffer<float> &v, DeviceBuffer<float> &v_max, int t, const AdamWConfig &config) {
+    const uint64_t num_parameters = params.size();
+    constexpr uint32_t block_size = 512;
+    const uint32_t num_blocks = ceil_div(num_parameters, block_size);
+
+    float weight_decay_with_lr = 1.0f - config.weight_decay * config.lr;
+    float inv_bias1 = 1.0f / (1.0f - std::pow(config.beta1, t));
+    float inv_bias2 = 1.0f / (1.0f - std::pow(config.beta2, t));
+
+    adamw_gpu_fp32_1xn_lerp<<<num_blocks, block_size>>>(
+        params.get(),
+        num_parameters,
+        config.lr,
+        weight_decay_with_lr,
+        config.beta1,
+        config.beta2,
+        inv_bias1,
+        inv_bias2,
+        config.eps,
+        grads.get(),
+        m.get(),
+        v.get(),
+        v_max.get(),
+        config.amsgrad
+    );
+
+    CUDA_CHECK(cudaGetLastError());
+}
+
+
+std::vector<float> generate_random_vector(size_t size, float min_value = -1.0f, float max_value = 1.0f) {
+    std::vector<float> vec(size);
+    std::mt19937 gen(42);
+    std::uniform_real_distribution<float> dis(min_value, max_value);
+    for (size_t i = 0; i < size; ++i) vec[i] = dis(gen);
+    return vec;
+}
 
 int main() {
+    try {
+        constexpr size_t num_params = 1048'576;
+        constexpr int t = 10;
+
+        AdamWConfig config;
+        config.amsgrad = true;
+
+        CUDA_CHECK(cudaSetDevice(0));
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, 0);
+
+        std::cout << "GPU: " << prop.name << "\n";
+        std::cout << "Compute Capability: " << prop.major << "." << prop.minor << "\n";
+
+        std::cout << "Global Memory: " << std::fixed << std::setprecision(1)
+                  << (prop.totalGlobalMem / 1e9) << " GB\n";
+
+        std::cout.unsetf(std::ios_base::floatfield);
+
+        auto h_params = generate_random_vector(num_params);
+        auto h_grads = generate_random_vector(num_params);
+        auto h_m = generate_random_vector(num_params, 0.0f, 1.0f);
+        auto h_v = generate_random_vector(num_params, 0.0f, 1.0f);
+        auto h_v_max = std::vector<float>(num_params, 0.0f);
+
+        DeviceBuffer<float> d_params(num_params);
+        DeviceBuffer<float> d_grads(num_params);
+        DeviceBuffer<float> d_m(num_params);
+        DeviceBuffer<float> d_v(num_params);
+        DeviceBuffer<float> d_v_max(num_params);
+
+        d_params.copyFromHost(h_params);
+        d_grads.copyFromHost(h_grads);
+        d_m.copyFromHost(h_m);
+        d_v.copyFromHost(h_v);
+        if (config.amsgrad) d_v_max.zeroOut();
+
+        launch_adamw(d_params, d_grads, d_m, d_v, d_v_max, t, config);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        constexpr int repeat_times = 1000;
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        for (int i = 0; i < repeat_times; ++i) {
+            launch_adamw(d_params, d_grads, d_m, d_v, d_v_max, t, config);
+        }
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double, std::milli> elapsed = end_time - start_time;
+
+        std::cout << "GPU kernel Executed " << repeat_times << " times.\n";
+        std::cout << "Average time per launch: " << (elapsed.count() / repeat_times) << " ms\n";
+
+        d_params.copyToHost(h_params);
+        std::cout << "First updated params: " << h_params[0] << "\n";
+
+    } catch (const std::exception &e) {
+        std::cerr << "Fatal Error: " << e.what() << "\n";
+        return EXIT_FAILURE;
+    }
 }
